@@ -1,6 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
 project(booster_interface)
-
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
@@ -35,10 +34,22 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/AgentService.srv"
 )
 
-# 安装头文件
-install(DIRECTORY include/
-  DESTINATION include/
-)
+include("${CMAKE_CURRENT_LIST_DIR}/../.workflow/project-defined.cmake")
+closure_import_prepare_project()
+
+
+macro(default_install_none)
+  # 安装头文件
+  install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ DESTINATION include/)
+endmacro()
+
+macro(custom_install_env)
+  install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ DESTINATION ${CMAKE_INSTALL_PREFIX}/include)
+endmacro()
+
+set(CUSTOM_VAR_LIB_BINARY_INSTALL "1")
+closure_import_install_project(default_install_none custom_install_env)
+
 
 # 导出依赖
 ament_export_dependencies(rosidl_default_runtime)
