@@ -1,0 +1,123 @@
+version: '1.0'
+name: git-ee-pipe-1760464168
+displayName: git-ee-pipe-1760464168
+triggers:
+  trigger: auto
+  push:
+    branches:
+      prefix:
+        - ''
+
+# 太蠢了
+# Yaml的锚点语法不支持
+
+stages:
+
+
+  - name: wait-paralleled
+    displayName: wait-paralleled
+    steps:
+
+      - step: shell@agent
+        name: step-wait-u-24-unknown-linux-gnu
+        displayName: step-wait-u-24-unknown-linux-gnu
+        hostGroupID:
+          ID: u-24-unknown-linux-gnu
+          hostID:
+            - 7a200648-f7df-484f-89e6-85a616a66e7c
+            - 0559270e-bea6-4272-8a9d-88e2a1c29e8b
+            - 7ee25351-38e6-4c86-a0d3-2b0f76bed1fb
+            - a8b94e6c-c723-4e77-bf12-12c6ac67f349
+            - fcd8077f-ec7e-447a-8ed1-295fefb6e30d
+            - 43c63095-774c-4cfb-8b3e-a92162768b28
+            - 76ba81f4-4bfb-4734-bf9e-adb6b428a216
+            - 994ed2f5-a06a-498a-8608-0b11c87d7717
+            - 0851ada9-f15a-46cb-8420-f3552bc59870
+            - dcadbf1e-237d-4994-92d0-f0359ba6fc65
+        strategy:
+          retry: '9'
+          timeout: 60
+        script:
+          - export CUSTOM_ENV_JOB_STAGE_STEP_NAME="step-wait-u-24-unknown-linux-gnu"
+          - export CUSTOM_ENV_DOWNLOAD_TARGET_ARRAY="aarch64-unknown-linux-gnu;x86_64-unknown-linux-gnu"
+          - export CUSTOM_ENV_DOWNLOAD_OS_VERSION="Linux 22.04 Ubuntu"
+          - curl --silent --show-error --output s-70-closure-build-project.sh http://192.168.33.162:20103/file-build-storage/script/s-70-closure-build-project.sh
+          - curl --silent --show-error --output s-80-action-build-project.sh http://192.168.33.162:20103/file-build-storage/script/s-80-action-build-project.sh
+          - sh s-80-action-build-project.sh
+
+
+
+
+  - name: build-paralleled
+    displayName: build-paralleled
+    steps:
+
+      - step: shell@agent
+        name: step-build-u-22-aarch64-unknown-linux-gnu
+        displayName: step-build-u-22-aarch64-unknown-linux-gnu
+        hostGroupID:
+          ID: u-22-aarch64-unknown-linux-gnu
+          hostID:
+            - de76b749-9d62-440d-88d8-4373526769a6
+            - 33b6f200-5b8d-4e88-94ba-b21a9d847e98
+        script:
+          - export CUSTOM_ENV_JOB_STAGE_STEP_NAME="step-build-22-aarch64-unknown-linux-gnu"
+          - curl --silent --show-error --output s-70-closure-build-project.sh http://192.168.33.162:20103/file-build-storage/script/s-70-closure-build-project.sh
+          - curl --silent --show-error --output s-80-action-build-project.sh http://192.168.33.162:20103/file-build-storage/script/s-80-action-build-project.sh
+          - sh s-80-action-build-project.sh
+
+
+#     - step: shell@agent
+#       name: step-build-u-24-aarch64-unknown-linux-gnu
+#       displayName: step-build-u-24-aarch64-unknown-linux-gnu
+#       hostGroupID:
+#         ID: u-24-aarch64-unknown-linux-gnu
+#         hostID:
+#           - ceb50007-5022-4528-82f8-cac56fff1997
+#       script:
+#         - export CUSTOM_ENV_JOB_STAGE_STEP_NAME="step-build-24-aarch64-unknown-linux-gnu"
+#         - curl --silent --show-error --output s-70-closure-build-project.sh http://192.168.33.162:20103/file-build-storage/script/s-70-closure-build-project.sh
+#         - curl --silent --show-error --output s-80-action-build-project.sh http://192.168.33.162:20103/file-build-storage/script/s-80-action-build-project.sh
+#         - sh s-80-action-build-project.sh
+
+
+      - step: shell@agent
+        name: step-build-u-22-x86_64-unknown-linux-gnu
+        displayName: step-build-u-22-x86_64-unknown-linux-gnu
+        hostGroupID:
+          ID: u-22-x86_64-unknown-linux-gnu
+          hostID:
+            - 13de56cc-be54-4140-a383-84610d6edacb
+            - 08cc933d-21e6-45c5-94d3-91b74e585fb7
+            - 3989f12a-5077-4a9f-bf14-db89c7b05343
+            - 23b30227-7027-4ddc-9552-21447f7f5d82
+            - 95629513-e57e-42de-ac18-d1bb89194547
+            - 68f8ef54-5453-45cf-8b35-acaeee1fb0e9
+            - 4f16f4f1-9875-410a-a9e6-f604ee8cd2eb
+            - c3c611fb-4fc1-4732-acf0-57a032965657
+        script:
+          - export CUSTOM_ENV_JOB_STAGE_STEP_NAME="step-build-22-x86_64-unknown-linux-gnu"
+          - curl --silent --show-error --output s-70-closure-build-project.sh http://192.168.33.162:20103/file-build-storage/script/s-70-closure-build-project.sh
+          - curl --silent --show-error --output s-80-action-build-project.sh http://192.168.33.162:20103/file-build-storage/script/s-80-action-build-project.sh
+          - sh s-80-action-build-project.sh
+
+
+#     - step: shell@agent
+#       name: step-build-u-24-x86_64-unknown-linux-gnu
+#       displayName: step-build-u-24-x86_64-unknown-linux-gnu
+#       hostGroupID:
+#         ID: u-24-x86_64-unknown-linux-gnu
+#         hostID:
+#           - fbd07b0d-41ea-420d-8d8c-27aa3d77fcc5
+#           - ea4bde4e-6911-4730-9ed5-7dd1f3199c53
+#           - f98df53b-60da-4946-b710-7d3e3b585bcc
+#           - 94f48ac9-2a23-4868-a998-392155eb3849
+#           - d782e716-897c-42ee-822c-3c1d50749b10
+#           - 6b01cde0-f4d2-4080-8157-d3a721498248
+#           - f4c4a860-d0ff-40fc-ae43-5fe65726d6f1
+#           - 4a41bf06-87ef-4cbd-b92f-163096f2a542
+#       script:
+#         - export CUSTOM_ENV_JOB_STAGE_STEP_NAME="step-build-24-x86_64-unknown-linux-gnu"
+#         - curl --silent --show-error --output s-70-closure-build-project.sh http://192.168.33.162:20103/file-build-storage/script/s-70-closure-build-project.sh
+#         - curl --silent --show-error --output s-80-action-build-project.sh http://192.168.33.162:20103/file-build-storage/script/s-80-action-build-project.sh
+#         - sh s-80-action-build-project.sh
