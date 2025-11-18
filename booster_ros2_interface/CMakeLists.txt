@@ -40,7 +40,7 @@ closure_import_prepare_project()
 
 macro(default_install_none)
   # 安装头文件
-  install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ DESTINATION include/)
+  install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ DESTINATION ${CMAKE_INSTALL_PREFIX}/include)
 endmacro()
 
 macro(custom_install_env)
