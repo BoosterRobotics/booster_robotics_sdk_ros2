@@ -34,9 +34,6 @@ stages:
             - 994ed2f5-a06a-498a-8608-0b11c87d7717
             - 0851ada9-f15a-46cb-8420-f3552bc59870
             - dcadbf1e-237d-4994-92d0-f0359ba6fc65
-        strategy:
-          retry: '9'
-          timeout: 60
         script:
           - export CUSTOM_ENV_JOB_STAGE_STEP_NAME="step-wait-u-24-unknown-linux-gnu"
           - export CUSTOM_ENV_DOWNLOAD_TARGET_ARRAY="aarch64-unknown-linux-gnu;x86_64-unknown-linux-gnu"
