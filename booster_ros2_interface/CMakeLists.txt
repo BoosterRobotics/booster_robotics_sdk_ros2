@@ -35,7 +35,6 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 )
 
 include("${CMAKE_CURRENT_LIST_DIR}/../.workflow/project-defined.cmake")
-closure_import_prepare_project()
 
 
 macro(default_install_none)
