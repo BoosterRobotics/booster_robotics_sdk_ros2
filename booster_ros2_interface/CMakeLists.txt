@@ -37,9 +37,12 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 include("${CMAKE_CURRENT_LIST_DIR}/../.workflow/project-defined.cmake")
 
 
+# 安装头文件
+install(DIRECTORY include/
+        DESTINATION include/
+)
+
 macro(default_install_none)
-  # 安装头文件
-  install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ DESTINATION ${CMAKE_INSTALL_PREFIX}/include)
 endmacro()
 
 macro(custom_install_env)
