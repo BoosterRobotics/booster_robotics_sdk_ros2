@@ -30,8 +30,6 @@ stages:
             - 0851ada9-f15a-46cb-8420-f3552bc59870
         script:
           - export CUSTOM_ENV_JOB_STAGE_STEP_NAME="step-wait-u-24-unknown-linux-gnu"
-          - export CUSTOM_ENV_DOWNLOAD_TARGET_ARRAY="aarch64-unknown-linux-gnu;x86_64-unknown-linux-gnu"
-          - export CUSTOM_ENV_DOWNLOAD_OS_VERSION="Linux 22.04 Ubuntu"
           - curl --silent --show-error --output s-70-closure-build-project.sh http://192.168.33.162:20103/file-build-storage/script/s-70-closure-build-project.sh
           - curl --silent --show-error --output s-80-action-build-project.sh http://192.168.33.162:20103/file-build-storage/script/s-80-action-build-project.sh
           - sh s-80-action-build-project.sh
