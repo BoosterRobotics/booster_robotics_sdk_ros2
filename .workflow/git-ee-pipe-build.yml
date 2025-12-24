@@ -1,6 +1,6 @@
 version: '1.0'
-name: git-ee-pipe-1760464395
-displayName: git-ee-pipe-1760464395
+name: git-ee-pipe-1760465496
+displayName: git-ee-pipe-1760465496
 triggers:
   trigger: auto
   push:
