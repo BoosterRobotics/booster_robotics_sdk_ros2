@@ -2,6 +2,7 @@ build/
 install/
 log/
 
+/directory-sys/
 
 .idea
 CMakeLists.bak.txt
