@@ -6,7 +6,7 @@ triggers:
   push:
     branches:
       prefix:
-        - ''
+        - 'ci-'
 
 # 太蠢了
 # Yaml的锚点语法不支持
