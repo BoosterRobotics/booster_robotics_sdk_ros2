@@ -1,51 +1,53 @@
+
+
 # booster_ros2_interface
 
-booster_ros2_interface 是一个ROS 2接口包，为机器人控制提供了一系列的消息和服务定义。
+booster_ros2_interface is a ROS 2 interface package that provides a series of message and service definitions for robot control.
 
-## 概述
+## Overview
 
-该接口包包含了多种消息类型和服务，可以用于机器人状态发布、命令控制、RPC服务调用等场景。主要包含以下内容：
+This interface package contains various message types and services that can be used in scenarios such as robot state publishing, command control, and RPC service invocation. It mainly includes the following:
 
-- 各种消息定义（msg/目录下）：包括机器人低层状态（LowState）、电机状态（MotorState）、IMU数据（ImuState）等。
-- 服务定义（srv/目录下）：包括RPC服务（RpcService）和代理服务（AgentService）。
+- Various message definitions (under the msg/ directory): including robot low-level state (LowState), motor state (MotorState), IMU data (ImuState), etc.
+- Service definitions (under the srv/ directory): including RPC service (RpcService) and Agent service (AgentService).
 
-## 消息类型
+## Message Types
 
-- **BoosterApiReqMsg/BoosterApiRespMsg**：用于API请求和响应消息。
-- **ButtonEventMsg**：按钮事件消息。
-- **FallDownState**：机器人跌倒状态消息。
-- **HandCommand/HandDdsMsg/HandParam**：手部控制相关消息。
-- **ImuState**：IMU传感器状态消息。
-- **LowCmd/LowState**：低层命令和状态消息。
-- **MotorCmd/MotorState**：电机命令和状态消息。
-- **Odometer**：里程计消息。
-- **RawBytesMsg**：原始字节消息。
-- **RemoteControllerState**：遥控器状态消息。
+- **BoosterApiReqMsg/BoosterApiRespMsg**: Used for API request and response messages.
+- **ButtonEventMsg**: Button event message.
+- **FallDownState**: Robot fall down state message.
+- **HandCommand/HandDdsMsg/HandParam**: Hand control-related messages.
+- **ImuState**: IMU sensor state message.
+- **LowCmd/LowState**: Low-level command and state messages.
+- **MotorCmd/MotorState**: Motor command and state messages.
+- **Odometer**: Odometer message.
+- **RawBytesMsg**: Raw bytes message.
+- **RemoteControllerState**: Remote controller state message.
 
-## 服务类型
+## Service Types
 
-- **AgentService**：代理服务，用于字符串消息的请求和响应。
-- **RpcService**：RPC服务，用于更复杂的数据交互。
+- **AgentService**: Agent service used for request and response of string messages.
+- **RpcService**: RPC service used for more complex data interactions.
 
-## 使用方法
+## Usage
 
-要使用这些消息和服务，请确保在您的ROS 2工作空间中正确安装并构建了此接口包。然后，您可以创建发布者、订阅者、客户端和服务端来使用这些定义的消息和服务。
+To use these messages and services, ensure that this interface package is correctly installed and built in your ROS 2 workspace. Then, you can create publishers, subscribers, clients, and service servers to utilize these defined messages and services.
 
-## 依赖项
+## Dependencies
 
 - ROS 2 (rclcpp)
 - ament_cmake
 - rosidl_default_generators
 - rosidl_default_runtime
 
-## 构建
+## Building
 
-要构建此包，请使用ROS 2的构建工具ament_cmake。确保所有依赖项都已安装，并运行`colcon build`命令。
+To build this package, use the ROS 2 build tool `ament_cmake`. Make sure all dependencies are installed, and then run the `colcon build` command.
 
-## 贡献
+## Contributing
 
-欢迎贡献新的消息类型或改进现有的定义。请提交PR或Issue以讨论和贡献代码。
+Contributions of new message types or improvements to existing definitions are welcome. Please submit a PR or Issue to discuss and contribute code.
 
-## 许可证
+## License
 
-此项目目前使用默认的ROS 2许可证，请参阅LICENSE文件获取详细信息。
+This project currently uses the default ROS 2 license. Please see the LICENSE file for details.
