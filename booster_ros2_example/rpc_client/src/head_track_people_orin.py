@@ -30,6 +30,11 @@ def clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
 
+def lerp(a: float, b: float, t: float) -> float:
+    t = clamp(float(t), 0.0, 1.0)
+    return (1.0 - t) * float(a) + t * float(b)
+
+
 def apply_deadband(value: float, deadband: float) -> float:
     deadband = max(0.0, float(deadband))
     if abs(value) <= deadband:
@@ -113,7 +118,7 @@ class HeadTrackPeople(Node):
         self.declare_parameter("hold_bbox_sec", 1.5)
         self.declare_parameter("show_bbox_when_missing", True)
 
-        self.declare_parameter("track_pitch", False)
+        self.declare_parameter("track_pitch", True)
         self.declare_parameter("pitch_hold", 0.0)
         self.declare_parameter("target_smoothing_alpha", 0.6)
 
@@ -155,8 +160,23 @@ class HeadTrackPeople(Node):
         self.declare_parameter("pid_integral_decay", 0.90)
         self.declare_parameter("yaw_limit_left", 0.785)
         self.declare_parameter("yaw_limit_right", -0.785)
-        self.declare_parameter("pitch_limit_up", -0.3)
-        self.declare_parameter("pitch_limit_down", 1.0)
+        # Pitch conventions: +down, -up
+        # Requested range: [-0.3, 0.0]
+        self.declare_parameter("pitch_limit_up", -0.28)
+        self.declare_parameter("pitch_limit_down", 0.0)
+
+        # Distance-based pitch behavior
+        self.declare_parameter("pitch_track_by_distance", True)
+        self.declare_parameter("pitch_fixed_on_detect", True)
+        self.declare_parameter("pitch_detected_rad", -0.30)
+        self.declare_parameter("pitch_instant_set", True)
+        self.declare_parameter("pitch_home_rad", 0.0)
+        self.declare_parameter("pitch_near_m", 0.8)
+        self.declare_parameter("pitch_far_m", 1.5)
+        self.declare_parameter("pitch_near_rad", -0.30)
+        self.declare_parameter("pitch_mid_rad", -0.15)
+        self.declare_parameter("pitch_far_rad", 0.0)
+        self.declare_parameter("pitch_return_on_missing", True)
 
         self.declare_parameter("min_depth_m", 0.2)
         self.declare_parameter("max_depth_m", 6.0)
@@ -281,6 +301,32 @@ class HeadTrackPeople(Node):
         self.yaw_limit_right = float(self.get_parameter("yaw_limit_right").value)
         self.pitch_limit_up = float(self.get_parameter("pitch_limit_up").value)
         self.pitch_limit_down = float(self.get_parameter("pitch_limit_down").value)
+
+        self.pitch_track_by_distance = bool(
+            self.get_parameter("pitch_track_by_distance").value
+        )
+        self.pitch_fixed_on_detect = bool(
+            self.get_parameter("pitch_fixed_on_detect").value
+        )
+        self.pitch_detected_rad = float(
+            self.get_parameter("pitch_detected_rad").value
+        )
+        self.pitch_instant_set = bool(
+            self.get_parameter("pitch_instant_set").value
+        )
+        self.pitch_home_rad = float(self.get_parameter("pitch_home_rad").value)
+        self.pitch_near_m = float(self.get_parameter("pitch_near_m").value)
+        self.pitch_far_m = float(self.get_parameter("pitch_far_m").value)
+        self.pitch_near_rad = float(self.get_parameter("pitch_near_rad").value)
+        self.pitch_mid_rad = float(self.get_parameter("pitch_mid_rad").value)
+        self.pitch_far_rad = float(self.get_parameter("pitch_far_rad").value)
+        self.pitch_return_on_missing = bool(
+            self.get_parameter("pitch_return_on_missing").value
+        )
+
+        # Ensure distance thresholds are sane.
+        self.pitch_near_m = max(0.01, self.pitch_near_m)
+        self.pitch_far_m = max(self.pitch_near_m + 1e-3, self.pitch_far_m)
 
         self.min_depth_m = float(self.get_parameter("min_depth_m").value)
         self.max_depth_m = float(self.get_parameter("max_depth_m").value)
@@ -926,127 +972,228 @@ class HeadTrackPeople(Node):
         self.current_pitch = pitch
 
     def control_timer_cb(self):
-        if self.intrinsics is None:
-            return
-
-        if self.latest_target_px is None or self.latest_detection_time is None:
-            return
-
-        age = time.time() - self.latest_detection_time
-        if age > self.stale_detection_sec:
-            return
-
         now_mono = time.monotonic()
         if now_mono < self._hold_until_mono:
             return
 
-        if self._smoothed_target_px is not None:
-            u = int(round(self._smoothed_target_px[0]))
-            v = int(round(self._smoothed_target_px[1]))
-        else:
-            u, v = self.latest_target_px
-        intr = self.intrinsics
+        now_wall = time.time()
+        target_valid = (
+            self.latest_target_px is not None
+            and self.latest_detection_time is not None
+            and (now_wall - self.latest_detection_time) <= self.stale_detection_sec
+        )
 
-        # Pixel offsets from center.
-        du_px = float(u) - float(intr.cx)
-        dv_px = float(v) - float(intr.cy)
+        new_yaw = self.current_yaw
+        new_pitch = self.current_pitch if self.track_pitch else self.pitch_hold
 
-        # Apply a pixel tolerance window to avoid micro-corrections.
-        du_px_eff = apply_deadband(du_px, float(self.yaw_tolerance_px))
-        dv_px_eff = apply_deadband(dv_px, float(self.pitch_tolerance_px))
+        if target_valid:
+            if self.intrinsics is None:
+                return
 
-        # Normalize pixel offsets.
-        x_n = du_px_eff / intr.fx
-        y_n = dv_px_eff / intr.fy
+            if self._smoothed_target_px is not None:
+                u = int(round(self._smoothed_target_px[0]))
+                v = int(round(self._smoothed_target_px[1]))
+            else:
+                u, v = self.latest_target_px
+            intr = self.intrinsics
 
-        # Head conventions (from simple_head_test.py):
-        # yaw: +left, -right ; pitch: +down, -up
-        yaw_error = -math.atan(x_n)
-        pitch_error = math.atan(y_n)
+            # Pixel offsets from center.
+            du_px = float(u) - float(intr.cx)
+            dv_px = float(v) - float(intr.cy)
 
-        # Deadband in radians (small) for additional stability.
-        yaw_error = apply_deadband(yaw_error, self.yaw_deadband_rad)
-        pitch_error = apply_deadband(pitch_error, self.pitch_deadband_rad)
+            # Apply a pixel tolerance window to avoid micro-corrections.
+            du_px_eff = apply_deadband(du_px, float(self.yaw_tolerance_px))
+            dv_px_eff = apply_deadband(dv_px, float(self.pitch_tolerance_px))
 
-        if self.control_mode == "quantized":
-            # Split image into N equal vertical bins. Pick a fixed yaw target per bin.
-            # Person on left => positive yaw (turn left). Person on right => negative yaw.
-            width = None
-            if self._last_rgb_shape is not None:
-                width = int(self._last_rgb_shape[1])
-            if width is None or width <= 0:
-                width = int(round(intr.cx * 2.0))
-            width = max(1, width)
+            # Normalize pixel offsets.
+            x_n = du_px_eff / intr.fx
+            y_n = dv_px_eff / intr.fy
 
-            bins = self.quantized_bins
-            bin_w = float(width) / float(bins)
+            # Head conventions (from simple_head_test.py):
+            # yaw: +left, -right ; pitch: +down, -up
+            yaw_error = -math.atan(x_n)
+            pitch_error_img = math.atan(y_n)
 
-            raw_region = int(math.floor(float(u) / bin_w))
-            raw_region = int(clamp(raw_region, 0, bins - 1))
+            # Deadband in radians (small) for additional stability.
+            yaw_error = apply_deadband(yaw_error, self.yaw_deadband_rad)
+            pitch_error_img = apply_deadband(pitch_error_img, self.pitch_deadband_rad)
 
-            region = raw_region
-            if self._quantized_region is None:
-                self._quantized_region = raw_region
-            elif raw_region != self._quantized_region:
-                cur = int(self._quantized_region)
-                hyst = float(self.quantized_hysteresis_px)
+            if self.control_mode == "quantized":
+                # Split image into N equal vertical bins. Pick a fixed yaw target per bin.
+                # Person on left => positive yaw (turn left). Person on right => negative yaw.
+                width = None
+                if self._last_rgb_shape is not None:
+                    width = int(self._last_rgb_shape[1])
+                if width is None or width <= 0:
+                    width = int(round(intr.cx * 2.0))
+                width = max(1, width)
 
-                # Only update region if we move sufficiently past the boundary.
-                if raw_region > cur:
-                    boundary = float(cur + 1) * bin_w
-                    if float(u) > (boundary + hyst):
-                        self._quantized_region = raw_region
+                bins = self.quantized_bins
+                bin_w = float(width) / float(bins)
+
+                raw_region = int(math.floor(float(u) / bin_w))
+                raw_region = int(clamp(raw_region, 0, bins - 1))
+
+                region = raw_region
+                if self._quantized_region is None:
+                    self._quantized_region = raw_region
+                elif raw_region != self._quantized_region:
+                    cur = int(self._quantized_region)
+                    hyst = float(self.quantized_hysteresis_px)
+
+                    # Only update region if we move sufficiently past the boundary.
+                    if raw_region > cur:
+                        boundary = float(cur + 1) * bin_w
+                        if float(u) > (boundary + hyst):
+                            self._quantized_region = raw_region
+                    else:
+                        boundary = float(cur) * bin_w
+                        if float(u) < (boundary - hyst):
+                            self._quantized_region = raw_region
+                    region = int(self._quantized_region)
                 else:
-                    boundary = float(cur) * bin_w
-                    if float(u) < (boundary - hyst):
-                        self._quantized_region = raw_region
-                region = int(self._quantized_region)
-            else:
-                region = int(self._quantized_region)
+                    region = int(self._quantized_region)
 
-            yaw_targets = np.linspace(self.yaw_limit_left, self.yaw_limit_right, bins)
-            desired_yaw = float(yaw_targets[region])
-            if self.quantized_use_slew:
-                dy = desired_yaw - self.current_yaw
-                new_yaw = self.current_yaw + clamp(dy, -self.max_step_rad, self.max_step_rad)
-            else:
-                new_yaw = desired_yaw
+                yaw_targets = np.linspace(
+                    self.yaw_limit_left, self.yaw_limit_right, bins
+                )
+                desired_yaw = float(yaw_targets[region])
+                if self.quantized_use_slew:
+                    dy = desired_yaw - self.current_yaw
+                    new_yaw = self.current_yaw + clamp(
+                        dy, -self.max_step_rad, self.max_step_rad
+                    )
+                else:
+                    new_yaw = desired_yaw
 
-            # Keep yaw PID from accumulating in quantized mode.
-            self._yaw_pid.prev_time = now_mono
-            self._yaw_pid.prev_error = 0.0
-            self._yaw_pid.integral *= self.pid_integral_decay
-        else:
-            # If we're within pixel tolerance (effective offsets are zero), don't command motion.
-            # Also bleed integrators slightly so we don't "creep".
-            if du_px_eff == 0.0:
+                # Keep yaw PID from accumulating in quantized mode.
                 self._yaw_pid.prev_time = now_mono
                 self._yaw_pid.prev_error = 0.0
-                self._yaw_pid.integral *= self.tolerance_integral_decay
-                new_yaw = self.current_yaw
+                self._yaw_pid.integral *= self.pid_integral_decay
             else:
-                yaw_step = pid_step(
-                    error=yaw_error,
-                    state=self._yaw_pid,
-                    kp=self.yaw_kp,
-                    ki=self.yaw_ki,
-                    kd=self.yaw_kd,
-                    i_limit=self.pid_integral_limit,
-                    step_limit=self.max_step_rad,
-                    now=now_mono,
-                    integral_decay=self.pid_integral_decay,
-                )
-                new_yaw = self.current_yaw + yaw_step
+                # If we're within pixel tolerance (effective offsets are zero), don't command motion.
+                # Also bleed integrators slightly so we don't "creep".
+                if du_px_eff == 0.0:
+                    self._yaw_pid.prev_time = now_mono
+                    self._yaw_pid.prev_error = 0.0
+                    self._yaw_pid.integral *= self.tolerance_integral_decay
+                    new_yaw = self.current_yaw
+                else:
+                    yaw_step = pid_step(
+                        error=yaw_error,
+                        state=self._yaw_pid,
+                        kp=self.yaw_kp,
+                        ki=self.yaw_ki,
+                        kd=self.yaw_kd,
+                        i_limit=self.pid_integral_limit,
+                        step_limit=self.max_step_rad,
+                        now=now_mono,
+                        integral_decay=self.pid_integral_decay,
+                    )
+                    new_yaw = self.current_yaw + yaw_step
 
-        if self.track_pitch:
-            if dv_px_eff == 0.0:
+            # Pitch tracking
+            if self.track_pitch:
+                if self.pitch_fixed_on_detect:
+                    desired_pitch = float(self.pitch_detected_rad)
+                    desired_pitch = clamp(
+                        desired_pitch, self.pitch_limit_up, self.pitch_limit_down
+                    )
+
+                    if self.pitch_instant_set:
+                        new_pitch = desired_pitch
+                        # Reset PID state so it doesn't fight the fixed command later.
+                        self._pitch_pid.prev_time = now_mono
+                        self._pitch_pid.prev_error = 0.0
+                        self._pitch_pid.integral = 0.0
+                    else:
+                        pitch_err = desired_pitch - self.current_pitch
+                        pitch_err = apply_deadband(pitch_err, self.pitch_deadband_rad)
+                        pitch_step = pid_step(
+                            error=pitch_err,
+                            state=self._pitch_pid,
+                            kp=self.pitch_kp,
+                            ki=self.pitch_ki,
+                            kd=self.pitch_kd,
+                            i_limit=self.pid_integral_limit,
+                            step_limit=self.max_step_rad,
+                            now=now_mono,
+                            integral_decay=self.pid_integral_decay,
+                        )
+                        new_pitch = self.current_pitch + pitch_step
+                elif self.pitch_track_by_distance:
+                    d_m = self.latest_target_depth_m
+                    if d_m is None:
+                        desired_pitch = self.pitch_home_rad
+                    else:
+                        # Simple 2-step behavior:
+                        #   d < pitch_near_m      -> pitch_near_rad  (look up more)
+                        #   pitch_near_m..far_m   -> pitch_mid_rad
+                        #   d >= pitch_far_m      -> pitch_far_rad   (home)
+                        if d_m < self.pitch_near_m:
+                            desired_pitch = self.pitch_near_rad
+                        elif d_m < self.pitch_far_m:
+                            desired_pitch = self.pitch_mid_rad
+                        else:
+                            desired_pitch = self.pitch_far_rad
+
+                    pitch_err = desired_pitch - self.current_pitch
+                    pitch_err = apply_deadband(pitch_err, self.pitch_deadband_rad)
+                    pitch_step = pid_step(
+                        error=pitch_err,
+                        state=self._pitch_pid,
+                        kp=self.pitch_kp,
+                        ki=self.pitch_ki,
+                        kd=self.pitch_kd,
+                        i_limit=self.pid_integral_limit,
+                        step_limit=self.max_step_rad,
+                        now=now_mono,
+                        integral_decay=self.pid_integral_decay,
+                    )
+                    new_pitch = self.current_pitch + pitch_step
+                else:
+                    # Image-based pitch (legacy): keep centered vertically.
+                    if dv_px_eff == 0.0:
+                        self._pitch_pid.prev_time = now_mono
+                        self._pitch_pid.prev_error = 0.0
+                        self._pitch_pid.integral *= self.tolerance_integral_decay
+                        new_pitch = self.current_pitch
+                    else:
+                        pitch_step = pid_step(
+                            error=pitch_error_img,
+                            state=self._pitch_pid,
+                            kp=self.pitch_kp,
+                            ki=self.pitch_ki,
+                            kd=self.pitch_kd,
+                            i_limit=self.pid_integral_limit,
+                            step_limit=self.max_step_rad,
+                            now=now_mono,
+                            integral_decay=self.pid_integral_decay,
+                        )
+                        new_pitch = self.current_pitch + pitch_step
+            else:
+                # Keep pitch PID from accumulating when pitch tracking is disabled.
                 self._pitch_pid.prev_time = now_mono
                 self._pitch_pid.prev_error = 0.0
-                self._pitch_pid.integral *= self.tolerance_integral_decay
-                new_pitch = self.current_pitch
+                self._pitch_pid.integral *= self.pid_integral_decay
+                new_pitch = self.pitch_hold
+
+        # If target is missing/stale: return pitch to home (0.0 rad) if requested.
+        if (not target_valid) and self.track_pitch and self.pitch_return_on_missing:
+            desired_pitch = self.pitch_home_rad
+            desired_pitch = clamp(
+                float(desired_pitch), self.pitch_limit_up, self.pitch_limit_down
+            )
+            if self.pitch_instant_set:
+                new_pitch = desired_pitch
+                self._pitch_pid.prev_time = now_mono
+                self._pitch_pid.prev_error = 0.0
+                self._pitch_pid.integral = 0.0
             else:
+                pitch_err = desired_pitch - self.current_pitch
+                pitch_err = apply_deadband(pitch_err, self.pitch_deadband_rad)
                 pitch_step = pid_step(
-                    error=pitch_error,
+                    error=pitch_err,
                     state=self._pitch_pid,
                     kp=self.pitch_kp,
                     ki=self.pitch_ki,
@@ -1057,12 +1204,6 @@ class HeadTrackPeople(Node):
                     integral_decay=self.pid_integral_decay,
                 )
                 new_pitch = self.current_pitch + pitch_step
-        else:
-            # Keep pitch PID from accumulating when pitch tracking is disabled.
-            self._pitch_pid.prev_time = now_mono
-            self._pitch_pid.prev_error = 0.0
-            self._pitch_pid.integral *= self.pid_integral_decay
-            new_pitch = self.pitch_hold
 
         self._send_head(new_yaw, new_pitch)
 
