@@ -423,15 +423,23 @@ class HeadTrackPeople(Node):
         # Wave-hand configuration
         self.declare_parameter("wave_enable", True)
         self.declare_parameter("wave_min_distance_m", 2.0)
+        self.declare_parameter("wave_max_distance_m", 4.0)
         self.declare_parameter("wave_min_detection_s", 3.0)
         self.declare_parameter("wave_rpc_api_id", 2005)
         self.declare_parameter("wave_topic", "/wave_cmd")
 
         self.wave_enable = bool(self.get_parameter("wave_enable").value)
         self.wave_min_distance_m = float(self.get_parameter("wave_min_distance_m").value)
+        self.wave_max_distance_m = float(self.get_parameter("wave_max_distance_m").value)
         self.wave_min_detection_s = float(self.get_parameter("wave_min_detection_s").value)
         self.wave_rpc_api_id = int(self.get_parameter("wave_rpc_api_id").value)
         self.wave_topic = str(self.get_parameter("wave_topic").value)
+
+        # Ensure wave distance thresholds are sane.
+        self.wave_min_distance_m = max(0.0, float(self.wave_min_distance_m))
+        self.wave_max_distance_m = max(
+            float(self.wave_min_distance_m) + 1e-3, float(self.wave_max_distance_m)
+        )
 
         # Internal wave state
         self._wave_first_seen_ts: Optional[float] = None
@@ -535,14 +543,20 @@ class HeadTrackPeople(Node):
     def _update_waving(self, *, target_valid: bool, du_px: Optional[float], distance_m: Optional[float]):
         """Implements the spec:
 
-        - When detected continuously > wave_min_detection_s and distance > wave_min_distance_m: start waving
+        - When detected continuously > wave_min_detection_s and distance is in (wave_min_distance_m, wave_max_distance_m): start waving
         - Wave right hand if target is on right side; left hand if on left side
-        - If person disappears or distance <= wave_min_distance_m: stop waving
+        - If person disappears or distance outside thresholds: stop waving
         """
         if not self.wave_enable:
             return
 
-        if (not target_valid) or (distance_m is None) or (distance_m <= self.wave_min_distance_m) or (du_px is None):
+        if (
+            (not target_valid)
+            or (distance_m is None)
+            or (distance_m <= self.wave_min_distance_m)
+            or (distance_m >= self.wave_max_distance_m)
+            or (du_px is None)
+        ):
             if self._waving_side is not None:
                 self._stop_waving()
             self._wave_first_seen_ts = None
