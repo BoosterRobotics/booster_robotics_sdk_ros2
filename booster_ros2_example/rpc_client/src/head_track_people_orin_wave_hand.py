@@ -172,12 +172,15 @@ class HeadTrackPeople(Node):
         self.declare_parameter("pitch_detected_rad", -0.30)
         self.declare_parameter("pitch_instant_set", True)
         self.declare_parameter("pitch_home_rad", 0.0)
-        self.declare_parameter("pitch_near_m", 0.8)
+        self.declare_parameter("pitch_near_m", 1.2)
         self.declare_parameter("pitch_far_m", 1.5)
         self.declare_parameter("pitch_near_rad", -0.30)
         self.declare_parameter("pitch_mid_rad", -0.15)
         self.declare_parameter("pitch_far_rad", 0.0)
         self.declare_parameter("pitch_return_on_missing", True)
+        # If we were pitched up and then the target gets far / disappears,
+        # hold the last up-pitch angle for this long before returning home.
+        self.declare_parameter("pitch_hold_after_lost_sec", 3.0)
 
         self.declare_parameter("min_depth_m", 0.2)
         self.declare_parameter("max_depth_m", 6.0)
@@ -324,6 +327,10 @@ class HeadTrackPeople(Node):
         self.pitch_return_on_missing = bool(
             self.get_parameter("pitch_return_on_missing").value
         )
+        self.pitch_hold_after_lost_sec = float(
+            self.get_parameter("pitch_hold_after_lost_sec").value
+        )
+        self.pitch_hold_after_lost_sec = max(0.0, self.pitch_hold_after_lost_sec)
 
         # Ensure distance thresholds are sane.
         self.pitch_near_m = max(0.01, self.pitch_near_m)
@@ -403,6 +410,10 @@ class HeadTrackPeople(Node):
 
         self._yaw_pid = PIDState()
         self._pitch_pid = PIDState()
+
+        # Pitch-up hold state (monotonic time).
+        self._pitch_up_last_time_mono: Optional[float] = None
+        self._pitch_up_hold_pitch: Optional[float] = None
 
         self._quantized_region: Optional[int] = None
 
@@ -1235,18 +1246,126 @@ class HeadTrackPeople(Node):
             # Pitch tracking
             if self.track_pitch:
                 if self.pitch_fixed_on_detect:
-                    desired_pitch = float(self.pitch_detected_rad)
-                    desired_pitch = clamp(
-                        desired_pitch, self.pitch_limit_up, self.pitch_limit_down
+                    # Only pitch up when the target is near enough.
+                    # If we were already pitched up and the target becomes far / depth
+                    # disappears, hold the last up pitch for a short time.
+                    d_m = self.latest_target_depth_m
+                    pitch_up_condition = (d_m is not None) and (d_m < self.pitch_near_m)
+                    hold_active = (
+                        self._pitch_up_last_time_mono is not None
+                        and self._pitch_up_hold_pitch is not None
+                        and (now_mono - float(self._pitch_up_last_time_mono))
+                        < float(self.pitch_hold_after_lost_sec)
                     )
 
-                    if self.pitch_instant_set:
-                        new_pitch = desired_pitch
-                        # Reset PID state so it doesn't fight the fixed command later.
+                    if pitch_up_condition:
+                        desired_pitch = float(self.pitch_detected_rad)
+                        desired_pitch = clamp(
+                            float(desired_pitch),
+                            self.pitch_limit_up,
+                            self.pitch_limit_down,
+                        )
+
+                        if self.pitch_instant_set:
+                            new_pitch = desired_pitch
+                            # Reset PID state so it doesn't fight the fixed command later.
+                            self._pitch_pid.prev_time = now_mono
+                            self._pitch_pid.prev_error = 0.0
+                            self._pitch_pid.integral = 0.0
+                        else:
+                            pitch_err = desired_pitch - self.current_pitch
+                            pitch_err = apply_deadband(
+                                pitch_err, self.pitch_deadband_rad
+                            )
+                            pitch_step = pid_step(
+                                error=pitch_err,
+                                state=self._pitch_pid,
+                                kp=self.pitch_kp,
+                                ki=self.pitch_ki,
+                                kd=self.pitch_kd,
+                                i_limit=self.pid_integral_limit,
+                                step_limit=self.max_step_rad,
+                                now=now_mono,
+                                integral_decay=self.pid_integral_decay,
+                            )
+                            new_pitch = self.current_pitch + pitch_step
+
+                        # Update hold state while we're in the up region.
+                        self._pitch_up_last_time_mono = now_mono
+                        self._pitch_up_hold_pitch = float(new_pitch)
+                    elif hold_active:
+                        # Hold last up pitch.
+                        new_pitch = clamp(
+                            float(self._pitch_up_hold_pitch),
+                            self.pitch_limit_up,
+                            self.pitch_limit_down,
+                        )
                         self._pitch_pid.prev_time = now_mono
                         self._pitch_pid.prev_error = 0.0
-                        self._pitch_pid.integral = 0.0
+                        self._pitch_pid.integral *= self.pid_integral_decay
                     else:
+                        # After the hold expires (or if we never pitched up), return home.
+                        desired_pitch = float(self.pitch_home_rad)
+                        desired_pitch = clamp(
+                            float(desired_pitch),
+                            self.pitch_limit_up,
+                            self.pitch_limit_down,
+                        )
+
+                        if self.pitch_instant_set:
+                            new_pitch = desired_pitch
+                            self._pitch_pid.prev_time = now_mono
+                            self._pitch_pid.prev_error = 0.0
+                            self._pitch_pid.integral = 0.0
+                        else:
+                            pitch_err = desired_pitch - self.current_pitch
+                            pitch_err = apply_deadband(
+                                pitch_err, self.pitch_deadband_rad
+                            )
+                            pitch_step = pid_step(
+                                error=pitch_err,
+                                state=self._pitch_pid,
+                                kp=self.pitch_kp,
+                                ki=self.pitch_ki,
+                                kd=self.pitch_kd,
+                                i_limit=self.pid_integral_limit,
+                                step_limit=self.max_step_rad,
+                                now=now_mono,
+                                integral_decay=self.pid_integral_decay,
+                            )
+                            new_pitch = self.current_pitch + pitch_step
+
+                        self._pitch_up_last_time_mono = None
+                        self._pitch_up_hold_pitch = None
+                elif self.pitch_track_by_distance:
+                    d_m = self.latest_target_depth_m
+                    pitch_up_condition = (d_m is not None) and (d_m < self.pitch_near_m)
+                    hold_active = (
+                        self._pitch_up_last_time_mono is not None
+                        and self._pitch_up_hold_pitch is not None
+                        and (now_mono - float(self._pitch_up_last_time_mono))
+                        < float(self.pitch_hold_after_lost_sec)
+                    )
+
+                    if pitch_up_condition:
+                        desired_pitch = float(self.pitch_near_rad)
+                    elif hold_active:
+                        new_pitch = clamp(
+                            float(self._pitch_up_hold_pitch),
+                            self.pitch_limit_up,
+                            self.pitch_limit_down,
+                        )
+                        self._pitch_pid.prev_time = now_mono
+                        self._pitch_pid.prev_error = 0.0
+                        self._pitch_pid.integral *= self.pid_integral_decay
+                        # Skip PID update while holding.
+                        desired_pitch = None
+                    else:
+                        desired_pitch = float(self.pitch_home_rad)
+                        self._pitch_up_last_time_mono = None
+                        self._pitch_up_hold_pitch = None
+
+                    if desired_pitch is not None:
                         pitch_err = desired_pitch - self.current_pitch
                         pitch_err = apply_deadband(pitch_err, self.pitch_deadband_rad)
                         pitch_step = pid_step(
@@ -1261,36 +1380,9 @@ class HeadTrackPeople(Node):
                             integral_decay=self.pid_integral_decay,
                         )
                         new_pitch = self.current_pitch + pitch_step
-                elif self.pitch_track_by_distance:
-                    d_m = self.latest_target_depth_m
-                    if d_m is None:
-                        desired_pitch = self.pitch_home_rad
-                    else:
-                        # Simple 2-step behavior:
-                        #   d < pitch_near_m      -> pitch_near_rad  (look up more)
-                        #   pitch_near_m..far_m   -> pitch_mid_rad
-                        #   d >= pitch_far_m      -> pitch_far_rad   (home)
-                        if d_m < self.pitch_near_m:
-                            desired_pitch = self.pitch_near_rad
-                        elif d_m < self.pitch_far_m:
-                            desired_pitch = self.pitch_mid_rad
-                        else:
-                            desired_pitch = self.pitch_far_rad
-
-                    pitch_err = desired_pitch - self.current_pitch
-                    pitch_err = apply_deadband(pitch_err, self.pitch_deadband_rad)
-                    pitch_step = pid_step(
-                        error=pitch_err,
-                        state=self._pitch_pid,
-                        kp=self.pitch_kp,
-                        ki=self.pitch_ki,
-                        kd=self.pitch_kd,
-                        i_limit=self.pid_integral_limit,
-                        step_limit=self.max_step_rad,
-                        now=now_mono,
-                        integral_decay=self.pid_integral_decay,
-                    )
-                    new_pitch = self.current_pitch + pitch_step
+                        if pitch_up_condition:
+                            self._pitch_up_last_time_mono = now_mono
+                            self._pitch_up_hold_pitch = float(new_pitch)
                 else:
                     # Image-based pitch (legacy): keep centered vertically.
                     if dv_px_eff == 0.0:
@@ -1317,33 +1409,54 @@ class HeadTrackPeople(Node):
                 self._pitch_pid.prev_error = 0.0
                 self._pitch_pid.integral *= self.pid_integral_decay
                 new_pitch = self.pitch_hold
+                self._pitch_up_last_time_mono = None
+                self._pitch_up_hold_pitch = None
 
         # If target is missing/stale: return pitch to home (0.0 rad) if requested.
         if (not target_valid) and self.track_pitch and self.pitch_return_on_missing:
-            desired_pitch = self.pitch_home_rad
-            desired_pitch = clamp(
-                float(desired_pitch), self.pitch_limit_up, self.pitch_limit_down
+            hold_active = (
+                self._pitch_up_last_time_mono is not None
+                and self._pitch_up_hold_pitch is not None
+                and (now_mono - float(self._pitch_up_last_time_mono))
+                < float(self.pitch_hold_after_lost_sec)
             )
-            if self.pitch_instant_set:
-                new_pitch = desired_pitch
+            if hold_active:
+                new_pitch = clamp(
+                    float(self._pitch_up_hold_pitch),
+                    self.pitch_limit_up,
+                    self.pitch_limit_down,
+                )
                 self._pitch_pid.prev_time = now_mono
                 self._pitch_pid.prev_error = 0.0
-                self._pitch_pid.integral = 0.0
+                self._pitch_pid.integral *= self.pid_integral_decay
             else:
-                pitch_err = desired_pitch - self.current_pitch
-                pitch_err = apply_deadband(pitch_err, self.pitch_deadband_rad)
-                pitch_step = pid_step(
-                    error=pitch_err,
-                    state=self._pitch_pid,
-                    kp=self.pitch_kp,
-                    ki=self.pitch_ki,
-                    kd=self.pitch_kd,
-                    i_limit=self.pid_integral_limit,
-                    step_limit=self.max_step_rad,
-                    now=now_mono,
-                    integral_decay=self.pid_integral_decay,
+                desired_pitch = float(self.pitch_home_rad)
+                desired_pitch = clamp(
+                    float(desired_pitch), self.pitch_limit_up, self.pitch_limit_down
                 )
-                new_pitch = self.current_pitch + pitch_step
+                if self.pitch_instant_set:
+                    new_pitch = desired_pitch
+                    self._pitch_pid.prev_time = now_mono
+                    self._pitch_pid.prev_error = 0.0
+                    self._pitch_pid.integral = 0.0
+                else:
+                    pitch_err = desired_pitch - self.current_pitch
+                    pitch_err = apply_deadband(pitch_err, self.pitch_deadband_rad)
+                    pitch_step = pid_step(
+                        error=pitch_err,
+                        state=self._pitch_pid,
+                        kp=self.pitch_kp,
+                        ki=self.pitch_ki,
+                        kd=self.pitch_kd,
+                        i_limit=self.pid_integral_limit,
+                        step_limit=self.max_step_rad,
+                        now=now_mono,
+                        integral_decay=self.pid_integral_decay,
+                    )
+                    new_pitch = self.current_pitch + pitch_step
+
+                self._pitch_up_last_time_mono = None
+                self._pitch_up_hold_pitch = None
 
         self._send_head(new_yaw, new_pitch)
 
