@@ -100,6 +100,7 @@ class HeadTrackPeople(Node):
     def __init__(self):
         super().__init__("head_track_people")
 
+        self.DEBUG_DISPLAY = False  # Set True only when you have a display
         self.declare_parameter("rgb_topic", "/StereoNetNode/rectified_image")
         self.declare_parameter("depth_topic", "/StereoNetNode/stereonet_depth")
         self.declare_parameter("camera_info_topic", "/image_left_raw/camera_info")
@@ -1011,9 +1012,9 @@ class HeadTrackPeople(Node):
                         (0, 255, 255),
                         2,
                     )
-
-                cv2.imshow(self.viz_window, vis)
-                cv2.waitKey(1)
+                if self.DEBUG_DISPLAY:
+                    cv2.imshow(self.viz_window, vis)
+                    cv2.waitKey(1)
             return
 
         u, v = center
@@ -1062,8 +1063,9 @@ class HeadTrackPeople(Node):
                 (255, 255, 255),
                 2,
             )
-            cv2.imshow(self.viz_window, vis)
-            cv2.waitKey(1)
+            if self.DEBUG_DISPLAY:
+                cv2.imshow(self.viz_window, vis)
+                cv2.waitKey(1)
 
     def _ensure_rpc_ready(self) -> bool:
         if self.rpc_client.service_is_ready():
