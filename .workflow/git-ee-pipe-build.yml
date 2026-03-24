@@ -1,6 +1,6 @@
 version: '1.0'
-name: git-ee-pipe-1760465496
-displayName: git-ee-pipe-1760465496
+name: git-ee-pipe-1760475723
+displayName: git-ee-pipe-1760475723
 triggers:
   trigger: auto
   push:
@@ -48,10 +48,6 @@ stages:
           hostID:
             - de76b749-9d62-440d-88d8-4373526769a6
             - 33b6f200-5b8d-4e88-94ba-b21a9d847e98
-            - 926aebf7-42a1-4794-8166-f0ca28fadab8
-            - 2e9d29c7-31c2-4814-ae78-2108163acb5c
-            - e386b9c2-5a21-4e55-9fd2-6a8ef3e8c5f6
-            - c490100d-fc59-486e-bea0-4a5d246176dc
         script:
           - export CUSTOM_ENV_JOB_STAGE_STEP_NAME="step-build-22-aarch64-unknown-linux-gnu"
           - curl --silent --show-error --output s-70-closure-build-project.sh http://192.168.33.162:20103/file-build-storage/script/s-70-closure-build-project.sh
@@ -66,16 +62,12 @@ stages:
           ID: u-24-aarch64-unknown-linux-gnu
           hostID:
             - ceb50007-5022-4528-82f8-cac56fff1997
-            - de35a264-5cdb-40f0-9f61-20959d44ec47
-            - e2b356f1-bc7c-4218-baf9-992ecc11b3c0
-            - b8c44a03-2fdc-449e-b582-5b92c740fcb6
-            - 15d27cd4-7fb2-484d-ad03-b8552fc20701
-            - afee24da-28c6-4476-8860-7ec42a82a27b
         script:
           - export CUSTOM_ENV_JOB_STAGE_STEP_NAME="step-build-24-aarch64-unknown-linux-gnu"
           - curl --silent --show-error --output s-70-closure-build-project.sh http://192.168.33.162:20103/file-build-storage/script/s-70-closure-build-project.sh
           - curl --silent --show-error --output s-80-action-build-project.sh http://192.168.33.162:20103/file-build-storage/script/s-80-action-build-project.sh
           - sh s-80-action-build-project.sh
+
 
 
       - step: shell@agent
