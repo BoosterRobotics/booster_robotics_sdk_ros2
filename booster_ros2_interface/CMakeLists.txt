@@ -20,6 +20,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ImuState.msg"
   "msg/LowState.msg"
   "msg/RawBytesMsg.msg"
+  "msg/BatteryState.msg"
   "msg/Odometer.msg"
   "msg/FallDownState.msg"
   "msg/RemoteControllerState.msg"
