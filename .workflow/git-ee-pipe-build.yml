@@ -26,7 +26,6 @@ stages:
           hostID:
             - 7a200648-f7df-484f-89e6-85a616a66e7c
             - a8b94e6c-c723-4e77-bf12-12c6ac67f349
-            - 76ba81f4-4bfb-4734-bf9e-adb6b428a216
         script:
           - export CUSTOM_ENV_JOB_STAGE_STEP_NAME="step-wait-u-24-unknown-linux-gnu"
           - curl --silent --show-error --output s-70-closure-build-project.sh http://192.168.33.162:20103/file-build-storage/script/s-70-closure-build-project.sh
@@ -48,6 +47,8 @@ stages:
           hostID:
             - de76b749-9d62-440d-88d8-4373526769a6
             - 33b6f200-5b8d-4e88-94ba-b21a9d847e98
+            - 6cdb7da3-ae1d-4625-8949-9451c246099a
+            - 5cea8344-2e78-4824-8988-96ec6635c62d
         script:
           - export CUSTOM_ENV_JOB_STAGE_STEP_NAME="step-build-22-aarch64-unknown-linux-gnu"
           - curl --silent --show-error --output s-70-closure-build-project.sh http://192.168.33.162:20103/file-build-storage/script/s-70-closure-build-project.sh
