@@ -98,7 +98,7 @@ stages:
         hostGroupID:
           ID: u-24-x86_64-unknown-linux-gnu
           hostID:
-            - fbd07b0d-41ea-420d-8d8c-27aa3d77fcc5
+#           - fbd07b0d-41ea-420d-8d8c-27aa3d77fcc5
             - ea4bde4e-6911-4730-9ed5-7dd1f3199c53
             - f98df53b-60da-4946-b710-7d3e3b585bcc
             - 94f48ac9-2a23-4868-a998-392155eb3849
