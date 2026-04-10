@@ -13,6 +13,7 @@ import rclpy
 from cv_bridge import CvBridge
 from message_filters import ApproximateTimeSynchronizer, Subscriber
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
 
@@ -113,8 +114,25 @@ class HeadTrackPeople(Node):
         )
         self.declare_parameter("rpc_service_name", "booster_rpc_service")
 
+        # Startup gating (useful when launched before the rest of the robot stack).
+        # When enabled, the node blocks in __init__ until the RPC service (and optionally
+        # the input topics) are discoverable or a timeout elapses.
+        self.declare_parameter("startup_wait_sec", 0.0)
+        self.declare_parameter("startup_wait_for_rpc", True)
+        self.declare_parameter("startup_wait_for_topics", True)
+        self.declare_parameter("startup_wait_log_every_sec", 5.0)
+
         self.declare_parameter("enable_viz", True)
         self.declare_parameter("viz_window", "head_track_people")
+
+        # Debug logging
+        self.declare_parameter("debug_heartbeat_sec", 5.0)
+        self.declare_parameter("debug_log_ros_env", False)
+        # Limit how often we do heavy per-frame work in `synced_cb` (image decode,
+        # depth conversion, tracker/detector). Keeping this bounded helps avoid
+        # starving other GPU/CPU-heavy nodes (e.g., StereoNet).
+        # 0.0 means "process every synced frame".
+        self.declare_parameter("frame_process_hz", 0.0)
         self.declare_parameter("control_hz", 10.0)
         self.declare_parameter("stale_detection_sec", 0.75)
         self.declare_parameter("hold_bbox_sec", 1.5)
@@ -219,6 +237,16 @@ class HeadTrackPeople(Node):
 
         self.enable_viz = bool(self.get_parameter("enable_viz").value)
         self.viz_window = str(self.get_parameter("viz_window").value)
+
+        self.debug_heartbeat_sec = float(
+            self.get_parameter("debug_heartbeat_sec").value
+        )
+        self.debug_heartbeat_sec = max(0.0, self.debug_heartbeat_sec)
+        self.debug_log_ros_env = bool(
+            self.get_parameter("debug_log_ros_env").value
+        )
+        self.frame_process_hz = float(self.get_parameter("frame_process_hz").value)
+        self.frame_process_hz = max(0.0, self.frame_process_hz)
         self.control_hz = float(self.get_parameter("control_hz").value)
         self.stale_detection_sec = float(
             self.get_parameter("stale_detection_sec").value
@@ -369,10 +397,57 @@ class HeadTrackPeople(Node):
         self.tracker_max_age_sec = float(self.get_parameter("tracker_max_age_sec").value)
         self.tracker_max_age_sec = max(0.0, self.tracker_max_age_sec)
 
+        # Wave-hand configuration
+        self.declare_parameter("wave_enable", True)
+        self.declare_parameter("wave_min_distance_m", 1.5)
+        self.declare_parameter("wave_max_distance_m", 5.0)
+        self.declare_parameter("wave_min_detection_s", 3.0)
+        self.declare_parameter("wave_rpc_api_id", 2005)
+        self.declare_parameter("wave_topic", "/wave_cmd")
+
+        self.wave_enable = bool(self.get_parameter("wave_enable").value)
+        self.wave_min_distance_m = float(self.get_parameter("wave_min_distance_m").value)
+        self.wave_max_distance_m = float(self.get_parameter("wave_max_distance_m").value)
+        self.wave_min_detection_s = float(self.get_parameter("wave_min_detection_s").value)
+        self.wave_rpc_api_id = int(self.get_parameter("wave_rpc_api_id").value)
+        self.wave_topic = str(self.get_parameter("wave_topic").value)
+
+        # Ensure wave distance thresholds are sane.
+        self.wave_min_distance_m = max(0.0, float(self.wave_min_distance_m))
+        self.wave_max_distance_m = max(
+            float(self.wave_min_distance_m) + 1e-3, float(self.wave_max_distance_m)
+        )
+
+        # Internal wave state
+        self._wave_first_seen_ts: Optional[float] = None
+        self._waving_side: Optional[str] = None
+        # If no RPC api id is configured, publish simple string commands on `wave_topic`.
+        self.wave_pub = self.create_publisher(String, self.wave_topic, 10)
+
+        # Create RPC client early so startup gating can wait on the service.
+        self.rpc_client = self.create_client(RpcService, self.rpc_service_name)
+
+        # Optional: block until the perception stack is ready.
+        # IMPORTANT: do this BEFORE creating subscriptions / initializing heavy models,
+        # so this node cannot accidentally back-pressure publishers during boot.
+        self._startup_wait()
+
         self.bridge = CvBridge()
         self.intrinsics: Optional[Intrinsics] = None
         self._intrinsics_topic: Optional[str] = None
         self._last_rgb_shape: Optional[Tuple[int, int]] = None  # (h, w)
+
+        # Debug counters / timestamps
+        self._rgb_msg_count = 0
+        self._depth_msg_count = 0
+        self._synced_cb_count = 0
+        self._camera_info_msg_count = 0
+        self._last_rgb_time_mono: Optional[float] = None
+        self._last_depth_time_mono: Optional[float] = None
+        self._last_synced_time_mono: Optional[float] = None
+        self._last_caminfo_time_mono: Optional[float] = None
+        self._first_synced_logged = False
+        self._last_frame_process_time_mono: Optional[float] = None
 
         self.hog = cv2.HOGDescriptor()
         self.hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
@@ -421,33 +496,6 @@ class HeadTrackPeople(Node):
         self._last_command_time_mono: Optional[float] = None
         self._hold_until_mono: float = 0.0
 
-        # Wave-hand configuration
-        self.declare_parameter("wave_enable", True)
-        self.declare_parameter("wave_min_distance_m", 2.0)
-        self.declare_parameter("wave_max_distance_m", 4.0)
-        self.declare_parameter("wave_min_detection_s", 3.0)
-        self.declare_parameter("wave_rpc_api_id", 2005)
-        self.declare_parameter("wave_topic", "/wave_cmd")
-
-        self.wave_enable = bool(self.get_parameter("wave_enable").value)
-        self.wave_min_distance_m = float(self.get_parameter("wave_min_distance_m").value)
-        self.wave_max_distance_m = float(self.get_parameter("wave_max_distance_m").value)
-        self.wave_min_detection_s = float(self.get_parameter("wave_min_detection_s").value)
-        self.wave_rpc_api_id = int(self.get_parameter("wave_rpc_api_id").value)
-        self.wave_topic = str(self.get_parameter("wave_topic").value)
-
-        # Ensure wave distance thresholds are sane.
-        self.wave_min_distance_m = max(0.0, float(self.wave_min_distance_m))
-        self.wave_max_distance_m = max(
-            float(self.wave_min_distance_m) + 1e-3, float(self.wave_max_distance_m)
-        )
-
-        # Internal wave state
-        self._wave_first_seen_ts: Optional[float] = None
-        self._waving_side: Optional[str] = None
-        # If no RPC api id is configured, publish simple string commands on `wave_topic`.
-        self.wave_pub = self.create_publisher(String, self.wave_topic, 10)
-
         # Subscribe to one-or-more camera info topics.
         # By default we lock to the first valid intrinsics that match the RGB stream.
         topics = [t for t in self.camera_info_topics if isinstance(t, str) and t]
@@ -458,20 +506,41 @@ class HeadTrackPeople(Node):
 
         self._camera_info_subs = [
             self.create_subscription(
-                CameraInfo, t, lambda msg, topic=t: self.camera_info_cb(msg, topic), 10
+                CameraInfo,
+                t,
+                lambda msg, topic=t: self.camera_info_cb(msg, topic),
+                qos_profile_sensor_data,
             )
             for t in topics
         ]
 
-        self.rgb_sub = Subscriber(self, Image, self.rgb_topic)
-        self.depth_sub = Subscriber(self, Image, self.depth_topic)
+        # Use sensor-data QoS (best-effort) so we never back-pressure heavy publishers
+        # like depth images.
+        self.rgb_sub = Subscriber(
+            self, Image, self.rgb_topic, qos_profile=qos_profile_sensor_data
+        )
+        self.depth_sub = Subscriber(
+            self, Image, self.depth_topic, qos_profile=qos_profile_sensor_data
+        )
         self.sync = ApproximateTimeSynchronizer(
             [self.rgb_sub, self.depth_sub], queue_size=10, slop=0.15
         )
         self.sync.registerCallback(self.synced_cb)
 
-        self.rpc_client = self.create_client(RpcService, self.rpc_service_name)
         self.create_timer(1.0 / max(1.0, self.control_hz), self.control_timer_cb)
+
+        if self.debug_log_ros_env:
+            rmw = os.environ.get("RMW_IMPLEMENTATION", "")
+            domain = os.environ.get("ROS_DOMAIN_ID", "")
+            cyclonedds_uri = os.environ.get("CYCLONEDDS_URI", "")
+            ros_localhost = os.environ.get("ROS_LOCALHOST_ONLY", "")
+            self.get_logger().info(
+                "ROS env: RMW_IMPLEMENTATION='%s' ROS_DOMAIN_ID='%s' ROS_LOCALHOST_ONLY='%s' CYCLONEDDS_URI='%s'"
+                % (rmw, domain, ros_localhost, cyclonedds_uri)
+            )
+
+        if self.debug_heartbeat_sec > 0.0:
+            self.create_timer(self.debug_heartbeat_sec, self._debug_heartbeat_cb)
 
         self.get_logger().info(
             "HeadTrackPeople started. Topics: rgb=%s depth=%s info=%s service=%s"
@@ -484,6 +553,106 @@ class HeadTrackPeople(Node):
         )
         self.get_logger().info(
             f"Detector backend: {self.detector_backend} (tracker={self.enable_tracker}, type={self.tracker_type})"
+        )
+
+    def _startup_wait(self) -> None:
+        wait_sec = float(self.get_parameter("startup_wait_sec").value)
+        if wait_sec <= 0.0:
+            return
+
+        wait_for_rpc = bool(self.get_parameter("startup_wait_for_rpc").value)
+        wait_for_topics = bool(self.get_parameter("startup_wait_for_topics").value)
+        log_every = float(self.get_parameter("startup_wait_log_every_sec").value)
+        log_every = max(0.5, log_every)
+
+        required_topics = [
+            str(self.rgb_topic),
+            str(self.depth_topic),
+        ]
+        required_topics = [t for t in required_topics if isinstance(t, str) and t]
+
+        deadline = time.monotonic() + wait_sec
+        last_log = 0.0
+        self.get_logger().info(
+            "Startup wait enabled (%.1fs): rpc=%s topics=%s" %
+            (wait_sec, str(bool(wait_for_rpc)), str(bool(wait_for_topics)))
+        )
+
+        while rclpy.ok() and time.monotonic() < deadline:
+            rpc_ready = True
+            if wait_for_rpc:
+                try:
+                    rpc_ready = bool(
+                        self.rpc_client.service_is_ready()
+                        or self.rpc_client.wait_for_service(timeout_sec=0.2)
+                    )
+                except Exception:
+                    rpc_ready = False
+
+            topics_ready = True
+            if wait_for_topics and required_topics:
+                try:
+                    names = {name for (name, _types) in self.get_topic_names_and_types()}
+                    topics_ready = all(t in names for t in required_topics)
+                except Exception:
+                    topics_ready = False
+
+            if rpc_ready and topics_ready:
+                self.get_logger().info("Startup wait satisfied; continuing")
+                return
+
+            now = time.monotonic()
+            if (now - last_log) >= log_every:
+                last_log = now
+                self.get_logger().info(
+                    "Waiting for startup deps: rpc_ready=%s topics_ready=%s (%s)" %
+                    (
+                        str(bool(rpc_ready)),
+                        str(bool(topics_ready)),
+                        ",".join(required_topics) if required_topics else "<none>",
+                    )
+                )
+
+            time.sleep(0.2)
+
+        self.get_logger().warn(
+            "Startup wait timed out after %.1fs; continuing anyway" % wait_sec
+        )
+
+    def _debug_heartbeat_cb(self):
+        now_mono = time.monotonic()
+
+        def age(last: Optional[float]) -> str:
+            if last is None:
+                return "never"
+            return f"{(now_mono - float(last)):.2f}s"
+
+        rpc_ready = False
+        try:
+            rpc_ready = bool(self.rpc_client.service_is_ready())
+        except Exception:
+            rpc_ready = False
+
+        # Detection freshness
+        det_age = "never"
+        if self.latest_detection_time is not None:
+            det_age = f"{(time.time() - float(self.latest_detection_time)):.2f}s"
+
+        self.get_logger().info(
+            "HB rgb=%d(depth=%d sync=%d caminfo=%d) last(rgb=%s depth=%s sync=%s caminfo=%s) intrinsics=%s det_age=%s rpc_ready=%s"
+            % (
+                int(self._rgb_msg_count),
+                int(self._depth_msg_count),
+                int(self._synced_cb_count),
+                int(self._camera_info_msg_count),
+                age(self._last_rgb_time_mono),
+                age(self._last_depth_time_mono),
+                age(self._last_synced_time_mono),
+                age(self._last_caminfo_time_mono),
+                "set" if self.intrinsics is not None else "unset",
+                det_age,
+                str(bool(rpc_ready)),
+            )
         )
 
     def _rpc_wavehand(self, hand_index: int, hand_action: int) -> bool:
@@ -596,7 +765,19 @@ class HeadTrackPeople(Node):
         try:
             from ultralytics import YOLO  # type: ignore
         except Exception as e:
-            self.get_logger().warn(f"Ultralytics not available: {e}")
+            # Common Jetson failure mode: torch import fails because a CUDA runtime
+            # shared library is missing (e.g. cuDSS).
+            msg = str(e)
+            if "libcudss.so.0" in msg:
+                self.get_logger().warn(
+                    "Ultralytics not available because PyTorch failed to load 'libcudss.so.0'. "
+                    "If you have sudo, install the CUDA cuDSS runtime (often: 'sudo apt-get install libcudss0-cuda-12') "
+                    "and then run 'sudo ldconfig'. "
+                    "If you cannot use sudo, a common workaround is to launch with: "
+                    "LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/libcudss/12:$LD_LIBRARY_PATH"
+                )
+            else:
+                self.get_logger().warn(f"Ultralytics not available: {e}")
             self._yolo = None
             self._yolo_source = None
             return
@@ -613,7 +794,13 @@ class HeadTrackPeople(Node):
                 model_path = fallback or "yolov8n.pt"
 
         try:
-            self._yolo = YOLO(model_path)
+            # For TensorRT `.engine` (and some other formats), Ultralytics may not
+            # be able to infer the task; set it explicitly to avoid warnings.
+            try:
+                self._yolo = YOLO(model_path, task="detect")
+            except TypeError:
+                # Older Ultralytics versions don't accept `task=` here.
+                self._yolo = YOLO(model_path)
             self._yolo_source = model_path
             self.get_logger().info(f"Loaded YOLO model: {model_path}")
         except Exception as e:
@@ -652,10 +839,18 @@ class HeadTrackPeople(Node):
         if tracker is None:
             return
         x, y, w, h = bbox
-        ok = tracker.init(bgr, (float(x), float(y), float(w), float(h)))
+        try:
+            # OpenCV's Python bindings can be picky about bbox types depending on
+            # the distro build (and can throw cv2.error instead of returning False).
+            box = (int(x), int(y), int(w), int(h))
+            ok = tracker.init(bgr, box)
+        except Exception as e:
+            self.get_logger().warn(f"Tracker init failed: {e}")
+            return
+
         if ok:
             self._tracker = tracker
-            self._tracker_bbox = bbox
+            self._tracker_bbox = (int(x), int(y), int(w), int(h))
             self._tracker_last_ok_time = time.time()
 
     def _tracker_update(self, bgr: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
@@ -675,6 +870,9 @@ class HeadTrackPeople(Node):
 
     def camera_info_cb(self, msg: CameraInfo, topic: str):
         try:
+            self._camera_info_msg_count += 1
+            self._last_caminfo_time_mono = time.monotonic()
+
             if self.lock_camera_info and self._intrinsics_topic is not None:
                 return
 
@@ -876,16 +1074,24 @@ class HeadTrackPeople(Node):
                 classes=[0],  # person
                 max_det=10,
             )
-        except TypeError:
-            # Older ultralytics versions may not support some kwargs
-            results = self._yolo.predict(
-                source=detect_img,
-                imgsz=self.yolo_imgsz,
-                conf=self.yolo_conf,
-                iou=self.yolo_iou,
-                device=self.yolo_device,
-                verbose=False,
-            )
+        except TypeError as e:
+            # Older ultralytics versions may not support some kwargs.
+            # NOTE: TypeError can also come from inside ultralytics/torch.
+            # Keep this retry, but never let it crash the node.
+            try:
+                results = self._yolo.predict(
+                    source=detect_img,
+                    imgsz=self.yolo_imgsz,
+                    conf=self.yolo_conf,
+                    iou=self.yolo_iou,
+                    device=self.yolo_device,
+                    verbose=False,
+                )
+            except Exception as e2:
+                self.get_logger().warn(
+                    f"YOLO predict failed after retry (TypeError was: {e}): {e2}"
+                )
+                return None, None
         except Exception as e:
             self.get_logger().warn(f"YOLO predict failed: {e}")
             return None, None
@@ -936,6 +1142,38 @@ class HeadTrackPeople(Node):
         return (x, y, w, h), (u, v)
 
     def synced_cb(self, rgb_msg: Image, depth_msg: Image):
+        now_mono = time.monotonic()
+        self._synced_cb_count += 1
+        self._last_synced_time_mono = now_mono
+        self._rgb_msg_count += 1
+        self._depth_msg_count += 1
+        self._last_rgb_time_mono = now_mono
+        self._last_depth_time_mono = now_mono
+
+        # Optional rate-limit: avoid doing heavy work for every frame.
+        if self.frame_process_hz > 0.0:
+            min_dt = 1.0 / max(1e-3, float(self.frame_process_hz))
+            if (
+                self._last_frame_process_time_mono is not None
+                and (now_mono - float(self._last_frame_process_time_mono)) < float(min_dt)
+            ):
+                return
+            self._last_frame_process_time_mono = now_mono
+
+        if not self._first_synced_logged:
+            self._first_synced_logged = True
+            self.get_logger().info(
+                "First synced frame received: rgb_stamp=%d.%09d depth_stamp=%d.%09d rgb_enc=%s depth_enc=%s"
+                % (
+                    int(rgb_msg.header.stamp.sec),
+                    int(rgb_msg.header.stamp.nanosec),
+                    int(depth_msg.header.stamp.sec),
+                    int(depth_msg.header.stamp.nanosec),
+                    str(rgb_msg.encoding),
+                    str(depth_msg.encoding),
+                )
+            )
+
         bgr = self._rosimg_to_bgr(rgb_msg)
         depth = self._rosimg_to_depth(depth_msg)
         if bgr is None or depth is None:
@@ -1489,8 +1727,22 @@ def main(args=None):
     node = HeadTrackPeople()
     try:
         rclpy.spin(node)
+    except rclpy.executors.ExternalShutdownException:
+        # Happens when the ROS context is shutdown externally (e.g. SIGTERM from docker/launch).
+        pass
     except KeyboardInterrupt:
         pass
+    except Exception as e:
+        # rclpy can raise an RCLError if shutdown races with executor wait-set creation.
+        try:
+            from rclpy._rclpy_pybind11 import RCLError  # type: ignore
+
+            if isinstance(e, RCLError) and "context is not valid" in str(e):
+                pass
+            else:
+                raise
+        except ImportError:
+            raise
     finally:
         try:
             node._stop_waving()
@@ -1501,8 +1753,18 @@ def main(args=None):
                 cv2.destroyAllWindows()
         except Exception:
             pass
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            node.destroy_node()
+        except Exception:
+            pass
+        try:
+            if hasattr(rclpy, "try_shutdown"):
+                rclpy.try_shutdown()
+            else:
+                rclpy.shutdown()
+        except Exception:
+            # Can happen if shutdown is triggered twice (e.g. SIGTERM/timeout).
+            pass
 
 
 if __name__ == "__main__":
