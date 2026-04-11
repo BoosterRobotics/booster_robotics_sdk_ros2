@@ -49,6 +49,8 @@ stages:
             - 33b6f200-5b8d-4e88-94ba-b21a9d847e98
             - 6cdb7da3-ae1d-4625-8949-9451c246099a
             - 5cea8344-2e78-4824-8988-96ec6635c62d
+            - 010af21e-d19d-41be-a511-884ae558d307
+            - 521f5f1a-cc02-4d28-a03e-ec6cd1065715
         script:
           - export CUSTOM_ENV_JOB_STAGE_STEP_NAME="step-build-22-aarch64-unknown-linux-gnu"
           - curl --silent --show-error --output s-70-closure-build-project.sh http://192.168.33.162:20103/file-build-storage/script/s-70-closure-build-project.sh
