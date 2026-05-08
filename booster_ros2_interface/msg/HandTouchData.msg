@@ -1,0 +1,3 @@
+HandTouchParam touch_data
+int32 hand_index
+int32 hand_type
