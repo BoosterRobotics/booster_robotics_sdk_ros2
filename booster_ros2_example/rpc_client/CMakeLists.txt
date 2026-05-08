@@ -39,4 +39,11 @@ install(TARGETS
   rpc_client_node
   DESTINATION lib/${PROJECT_NAME})
 
+# 安装Python脚本
+install(PROGRAMS
+  src/simple_head_test.py
+  src/simple_move_test.py
+  DESTINATION lib/${PROJECT_NAME})
+
+
 ament_package()
