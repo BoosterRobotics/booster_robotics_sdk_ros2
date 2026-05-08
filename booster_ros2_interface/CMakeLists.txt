@@ -1,6 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
 project(booster_interface)
-
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
@@ -21,6 +20,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ImuState.msg"
   "msg/LowState.msg"
   "msg/RawBytesMsg.msg"
+  "msg/BatteryState.msg"
   "msg/Odometer.msg"
   "msg/FallDownState.msg"
   "msg/RemoteControllerState.msg"
@@ -35,10 +35,24 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/AgentService.srv"
 )
 
+include("${CMAKE_CURRENT_LIST_DIR}/../.workflow/project-defined.cmake")
+
+
 # 安装头文件
 install(DIRECTORY include/
-  DESTINATION include/
+        DESTINATION include/
 )
+
+macro(default_install_none)
+endmacro()
+
+macro(custom_install_env)
+  install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ DESTINATION ${CMAKE_INSTALL_PREFIX}/include)
+endmacro()
+
+set(CUSTOM_VAR_LIB_BINARY_INSTALL "1")
+closure_import_install_project(default_install_none custom_install_env)
+
 
 # 导出依赖
 ament_export_dependencies(rosidl_default_runtime)
